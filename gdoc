@@ -21,6 +21,7 @@ Sheets (same auth; ranges are A1 notation like 'Лист1!A2:D50'):
   gdoc ls --sheets [query]              list spreadsheets
   gdoc tabs <sheet>                     list sheet tabs + sizes
   gdoc newtab <sheet> "Название"        add an empty tab
+  gdoc rmtab <sheet> "Название"         delete a tab by exact title
   gdoc get <sheet> RANGE [out.tsv] [--formulas]   range -> TSV (stdout or file)
   gdoc set <sheet> RANGE "value"        write one cell (parsed as if typed)
   gdoc put <sheet> RANGE file.csv       write a block from csv/tsv
@@ -296,6 +297,18 @@ def cmd_newtab(a):
     print(f"added tab {a.title!r}")
 
 
+def cmd_rmtab(a):
+    sh = sheets_svc()
+    fid = doc_id(a.doc)
+    meta = sh.spreadsheets().get(spreadsheetId=fid, fields="sheets.properties").execute()
+    ids = {t["properties"]["title"]: t["properties"]["sheetId"] for t in meta["sheets"]}
+    if a.title not in ids:
+        sys.exit(f"no tab named {a.title!r}")
+    sh.spreadsheets().batchUpdate(spreadsheetId=fid, body={
+        "requests": [{"deleteSheet": {"sheetId": ids[a.title]}}]}).execute()
+    print(f"deleted tab {a.title!r}")
+
+
 def _selftest():
     doc = {"body": {"content": [
         {"paragraph": {"elements": [
@@ -345,6 +358,7 @@ s = sub.add_parser("comment"); s.add_argument("doc"); s.add_argument("text"); s.
 s = sub.add_parser("reply"); s.add_argument("doc"); s.add_argument("comment"); s.add_argument("text", nargs="?"); s.add_argument("--resolve", action="store_true"); s.set_defaults(f=cmd_reply)
 s = sub.add_parser("tabs"); s.add_argument("doc"); s.set_defaults(f=cmd_tabs)
 s = sub.add_parser("newtab"); s.add_argument("doc"); s.add_argument("title"); s.set_defaults(f=cmd_newtab)
+s = sub.add_parser("rmtab"); s.add_argument("doc"); s.add_argument("title"); s.set_defaults(f=cmd_rmtab)
 s = sub.add_parser("get"); s.add_argument("doc"); s.add_argument("range"); s.add_argument("out", nargs="?"); s.add_argument("--formulas", action="store_true"); s.set_defaults(f=cmd_get)
 s = sub.add_parser("set"); s.add_argument("doc"); s.add_argument("range"); s.add_argument("value"); s.set_defaults(f=cmd_set)
 s = sub.add_parser("put"); s.add_argument("doc"); s.add_argument("range"); s.add_argument("file"); s.set_defaults(f=cmd_put)

@@ -10,6 +10,12 @@ Built for AI-agent workflows (Claude Code): docs are pulled as markdown and edit
 cp gdoc ~/bin/gdoc && chmod +x ~/bin/gdoc   # or anywhere on PATH
 ```
 
+With the Claude Code skill (teaches Claude the safe pull -> edit -> verify workflow):
+
+```sh
+cp gdoc ~/bin/gdoc && chmod +x ~/bin/gdoc && mkdir -p ~/.claude/skills/google-docs && cp skill/SKILL.md ~/.claude/skills/google-docs/
+```
+
 Requires `uv`.
 
 ## Auth setup (once)
@@ -38,6 +44,7 @@ gdoc reply <doc> <id> ["text"] [--resolve]
 
 gdoc tabs <sheet>                     list sheet tabs + sizes
 gdoc newtab <sheet> "Title"           add an empty tab
+gdoc rmtab <sheet> "Title"            delete a tab by exact title
 gdoc get <sheet> "'Tab'!A1:D50" [out.tsv] [--formulas]
 gdoc set <sheet> "'Tab'!B2" "value"   one cell (USER_ENTERED: formulas work)
 gdoc put <sheet> "'Tab'!A2" file.csv  write a block
