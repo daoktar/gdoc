@@ -1,0 +1,355 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "google-api-python-client",
+#   "google-auth-oauthlib",
+# ]
+# ///
+"""gdoc — read/edit Google Docs from the shell. Markdown out, index-safe edits in.
+
+  gdoc ls "quarterly report"            list/search docs
+  gdoc pull <doc> [out.md]              export doc -> markdown file
+  gdoc edit <doc> -e OLD -e NEW ...     surgical replace (repeatable pairs)
+  gdoc edit <doc> --json edits.json     [{"old":"...","new":"..."}, ...]
+  gdoc push <doc> file.md --force       replace WHOLE doc from markdown
+  gdoc comments <doc>                   list comments + replies
+  gdoc comment <doc> "text" [--quote Q] add comment (unanchored; Q shown as quote)
+  gdoc reply <doc> <id> ["text"] [--resolve]
+
+Sheets (same auth; ranges are A1 notation like 'Лист1!A2:D50'):
+  gdoc ls --sheets [query]              list spreadsheets
+  gdoc tabs <sheet>                     list sheet tabs + sizes
+  gdoc newtab <sheet> "Название"        add an empty tab
+  gdoc get <sheet> RANGE [out.tsv] [--formulas]   range -> TSV (stdout or file)
+  gdoc set <sheet> RANGE "value"        write one cell (parsed as if typed)
+  gdoc put <sheet> RANGE file.csv       write a block from csv/tsv
+  gdoc append <sheet> TAB file.csv      append rows after existing data
+
+<doc> is a doc/sheet id or any docs.google.com URL.
+NOTE: OLD/NEW in `edit` match the doc's PLAIN text (no markdown syntax like **).
+"""
+import csv, json, os, re, sys, argparse, pathlib
+
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+CFG = pathlib.Path(os.path.expanduser("~/.config/gdoc"))
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+def _creds():
+    CFG.mkdir(parents=True, exist_ok=True)
+    tok, sec = CFG / "token.json", CFG / "client_secret.json"
+    creds = Credentials.from_authorized_user_file(tok, SCOPES) if tok.exists() else None
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            if not sec.exists():
+                sys.exit(f"missing {sec} — see setup notes")
+            creds = InstalledAppFlow.from_client_secrets_file(sec, SCOPES).run_local_server(port=0)
+        tok.write_text(creds.to_json())
+        tok.chmod(0o600)
+    return creds
+
+
+def svc():
+    c = _creds()
+    return build("docs", "v1", credentials=c), build("drive", "v3", credentials=c)
+
+
+def sheets_svc():
+    return build("sheets", "v4", credentials=_creds())
+
+
+def doc_id(s):
+    m = re.search(r"/(?:document|spreadsheets)/d/([\w-]+)", s)
+    return m.group(1) if m else s
+
+
+def flatten(doc):
+    """-> (plain_text, doc_indices, tab_ids), body-only docs get tab_id None."""
+    text, idx, tabs = [], [], []
+
+    def walk(elements, tab):
+        for el in elements:
+            if "paragraph" in el:
+                for r in el["paragraph"]["elements"]:
+                    tr = r.get("textRun")
+                    if tr:
+                        for i, ch in enumerate(tr["content"]):
+                            text.append(ch)
+                            idx.append(r["startIndex"] + i)
+                            tabs.append(tab)
+            elif "table" in el:
+                for row in el["table"]["tableRows"]:
+                    for cell in row["tableCells"]:
+                        walk(cell["content"], tab)
+            elif "tableOfContents" in el:
+                walk(el["tableOfContents"]["content"], tab)
+
+    def walk_tab(t):
+        walk(t.get("documentTab", {}).get("body", {}).get("content", []), t["tabProperties"]["tabId"])
+        for c in t.get("childTabs", []):
+            walk_tab(c)
+
+    if doc.get("tabs"):  # tabbed doc: content lives in tabs, not body
+        for t in doc["tabs"]:
+            walk_tab(t)
+    else:
+        walk(doc.get("body", {}).get("content", []), None)
+    return "".join(text), idx, tabs
+
+
+def cmd_ls(a):
+    _, drive = svc()
+    mt = "spreadsheet" if a.sheets else "document"
+    q = f"mimeType='application/vnd.google-apps.{mt}' and trashed=false"
+    if a.query:
+        q += " and name contains '%s'" % a.query.replace("\\", "\\\\").replace("'", "\\'")
+    for f in drive.files().list(q=q, pageSize=a.n, orderBy="modifiedTime desc",
+                                fields="files(id,name,modifiedTime)",
+                                supportsAllDrives=True, includeItemsFromAllDrives=True
+                                ).execute().get("files", []):
+        print(f"{f['id']}  {f['modifiedTime'][:10]}  {f['name']}")
+
+
+def cmd_pull(a):
+    _, drive = svc()
+    fid = doc_id(a.doc)
+    name = drive.files().get(fileId=fid, fields="name", supportsAllDrives=True).execute()["name"]
+    data = drive.files().export(fileId=fid, mimeType="text/markdown").execute()
+    out = pathlib.Path(a.out or re.sub(r"[^\w.-]+", "_", name) + ".md")
+    out.write_bytes(data)
+    print(f"{out}  ({len(data)} bytes)")
+
+
+def cmd_edit(a):
+    docs, _ = svc()
+    fid = doc_id(a.doc)
+    if a.json:
+        edits = json.loads(pathlib.Path(a.json).read_text())
+        edits = [(e["old"], e["new"]) for e in edits]
+    else:
+        if len(a.e) % 2:
+            sys.exit("-e takes OLD NEW pairs")
+        edits = list(zip(a.e[::2], a.e[1::2]))
+    if not edits:
+        sys.exit("no edits given (-e OLD NEW or --json)")
+
+    doc = docs.documents().get(documentId=fid, includeTabsContent=True).execute()
+    text, idx, tabs = flatten(doc)
+
+    spans = []
+    for old, new in edits:
+        hits = [m.start() for m in re.finditer(re.escape(old), text)]
+        if len(hits) != 1:
+            sys.exit(f"{'no match' if not hits else f'{len(hits)} matches'} for: {old[:60]!r}")
+        s, e = hits[0], hits[0] + len(old)
+        # a gap in doc indices means an inline image/footnote (or tab border)
+        # sits inside the match — deleting the range would silently eat it
+        if tabs[s] != tabs[e - 1] or idx[e - 1] - idx[s] + 1 != e - s:
+            sys.exit(f"match spans a non-text element (image/footnote/tab), refusing: {old[:60]!r}")
+        spans.append((idx[s], idx[e - 1] + 1, tabs[s], new))
+
+    # apply bottom-up per tab so earlier indices stay valid
+    spans.sort(key=lambda t: (str(t[2]), t[0]), reverse=True)
+    for (lo, _, tab, _), (_, hi2, tab2, _) in zip(spans, spans[1:]):
+        if tab == tab2 and hi2 > lo:
+            sys.exit("edits overlap in the document, refusing")
+
+    reqs = []
+    for lo, hi, tab, new in spans:
+        rng, loc = {"startIndex": lo, "endIndex": hi}, {"index": lo}
+        if tab:
+            rng["tabId"] = loc["tabId"] = tab
+        reqs.append({"deleteContentRange": {"range": rng}})
+        if new:
+            reqs.append({"insertText": {"location": loc, "text": new}})
+
+    docs.documents().batchUpdate(documentId=fid, body={
+        "requests": reqs,
+        # refuse to write if the doc changed since we read it
+        "writeControl": {"requiredRevisionId": doc["revisionId"]},
+    }).execute()
+    print(f"applied {len(spans)} edit(s) to {fid}")
+
+
+def cmd_push(a):
+    if not a.force:
+        sys.exit("push REPLACES the entire doc (comments are orphaned). Re-run with --force")
+    _, drive = svc()
+    fid = doc_id(a.doc)
+    media = MediaFileUpload(a.file, mimetype="text/markdown", resumable=True)
+    drive.files().update(fileId=fid, media_body=media,
+                         body={"mimeType": "application/vnd.google-apps.document"},
+                         supportsAllDrives=True).execute()
+    print(f"replaced {fid} from {a.file}")
+
+
+def cmd_comments(a):
+    _, drive = svc()
+    fid = doc_id(a.doc)
+    page = None
+    while True:
+        r = drive.comments().list(
+            fileId=fid, pageSize=100, pageToken=page, includeDeleted=False,
+            fields="nextPageToken,comments(id,author/displayName,content,resolved,"
+                   "quotedFileContent/value,replies(author/displayName,content))").execute()
+        for c in r.get("comments", []):
+            state = "resolved" if c.get("resolved") else "open"
+            print(f"[{c['id']}] {state}  {c['author']['displayName']}: {c['content']}")
+            q = (c.get("quotedFileContent") or {}).get("value")
+            if q:
+                print(f"    > {q[:100]}")
+            for rep in c.get("replies", []):
+                print(f"    ↳ {rep['author']['displayName']}: {rep.get('content', '')}")
+        page = r.get("nextPageToken")
+        if not page:
+            break
+
+
+def cmd_comment(a):
+    _, drive = svc()
+    fid = doc_id(a.doc)
+    body = {"content": a.text}
+    if a.quote:
+        # ponytail: display-only quote; Drive API can't anchor a comment to text
+        body["quotedFileContent"] = {"value": a.quote}
+    c = drive.comments().create(fileId=fid, body=body, fields="id").execute()
+    print(f"comment {c['id']} added")
+
+
+def cmd_reply(a):
+    _, drive = svc()
+    fid = doc_id(a.doc)
+    body = {}
+    if a.text:
+        body["content"] = a.text
+    if a.resolve:
+        body["action"] = "resolve"
+    if not body:
+        sys.exit("need reply text or --resolve")
+    drive.replies().create(fileId=fid, commentId=a.comment, body=body, fields="id").execute()
+    print(f"replied to {a.comment}" + (" (resolved)" if a.resolve else ""))
+
+
+def _read_table(path):
+    delim = "\t" if path.endswith(".tsv") else ","
+    with open(path, newline="") as f:
+        return list(csv.reader(f, delimiter=delim))
+
+
+def cmd_tabs(a):
+    meta = sheets_svc().spreadsheets().get(
+        spreadsheetId=doc_id(a.doc), fields="sheets.properties").execute()
+    for sh in meta["sheets"]:
+        pr = sh["properties"]
+        g = pr.get("gridProperties", {})
+        print(f"{pr['title']}\t{g.get('rowCount', '?')}x{g.get('columnCount', '?')}")
+
+
+def cmd_get(a):
+    r = sheets_svc().spreadsheets().values().get(
+        spreadsheetId=doc_id(a.doc), range=a.range,
+        valueRenderOption="FORMULA" if a.formulas else "FORMATTED_VALUE").execute()
+    rows = r.get("values", [])
+    out = open(a.out, "w", newline="") if a.out else sys.stdout
+    csv.writer(out, dialect="excel-tab").writerows(rows)
+    if a.out:
+        out.close()
+        print(f"{a.out}  ({len(rows)} rows)")
+
+
+def cmd_set(a):
+    sheets_svc().spreadsheets().values().update(
+        spreadsheetId=doc_id(a.doc), range=a.range,
+        valueInputOption="USER_ENTERED", body={"values": [[a.value]]}).execute()
+    print(f"set {a.range}")
+
+
+def cmd_put(a):
+    rows = _read_table(a.file)
+    sheets_svc().spreadsheets().values().update(
+        spreadsheetId=doc_id(a.doc), range=a.range,
+        valueInputOption="USER_ENTERED", body={"values": rows}).execute()
+    print(f"put {len(rows)} row(s) at {a.range}")
+
+
+def cmd_append(a):
+    rows = _read_table(a.file)
+    r = sheets_svc().spreadsheets().values().append(
+        spreadsheetId=doc_id(a.doc), range=a.range,
+        valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
+        body={"values": rows}).execute()
+    print(f"appended {len(rows)} row(s) -> {r['updates']['updatedRange']}")
+
+
+def cmd_newtab(a):
+    sheets_svc().spreadsheets().batchUpdate(
+        spreadsheetId=doc_id(a.doc),
+        body={"requests": [{"addSheet": {"properties": {"title": a.title}}}]}).execute()
+    print(f"added tab {a.title!r}")
+
+
+def _selftest():
+    doc = {"body": {"content": [
+        {"paragraph": {"elements": [
+            {"startIndex": 1, "textRun": {"content": "Hello world.\n"}}]}},
+        {"paragraph": {"elements": [
+            {"startIndex": 14, "textRun": {"content": "Second "}},
+            {"startIndex": 21, "textRun": {"content": "para.\n"}}]}},
+    ]}}
+    text, idx, tabs = flatten(doc)
+    assert text == "Hello world.\nSecond para.\n", repr(text)
+    assert len(idx) == len(text) == len(tabs)
+    s = text.index("world"); assert idx[s] == 7, idx[s]
+    # multi-paragraph span maps to a contiguous doc range
+    s = text.index("world.\nSecond"); e = s + len("world.\nSecond")
+    assert (idx[s], idx[e - 1] + 1) == (7, 20), (idx[s], idx[e - 1] + 1)
+    assert idx[e - 1] - idx[s] + 1 == e - s  # contiguity guard holds here
+    # tabbed doc: text comes from tabs, tagged with tabId
+    doc2 = {"tabs": [{"tabProperties": {"tabId": "t1"}, "documentTab": {"body": {"content": [
+        {"paragraph": {"elements": [{"startIndex": 1, "textRun": {"content": "Tab one.\n"}}]}}]}},
+        "childTabs": [{"tabProperties": {"tabId": "t2"}, "documentTab": {"body": {"content": [
+            {"paragraph": {"elements": [{"startIndex": 1, "textRun": {"content": "Child.\n"}}]}}]}}}]}]}
+    t2, i2, tb2 = flatten(doc2)
+    assert t2 == "Tab one.\nChild.\n", repr(t2)
+    assert tb2[0] == "t1" and tb2[-1] == "t2", tb2
+    # index restart between tabs trips the contiguity guard, not a silent delete
+    s = t2.index("one.\nChild"); e = s + len("one.\nChild")
+    assert not (tb2[s] == tb2[e - 1] and i2[e - 1] - i2[s] + 1 == e - s)
+    assert doc_id("https://docs.google.com/spreadsheets/d/AbC-123/edit#gid=0") == "AbC-123"
+    assert doc_id("https://docs.google.com/document/d/XyZ_9/edit") == "XyZ_9"
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, newline="") as f:
+        csv.writer(f).writerows([["a", "b,x"], ["1", "2"]])
+    assert _read_table(f.name) == [["a", "b,x"], ["1", "2"]]
+    os.unlink(f.name)
+    print("selftest ok")
+
+
+p = argparse.ArgumentParser(prog="gdoc", description=__doc__,
+                            formatter_class=argparse.RawDescriptionHelpFormatter)
+sub = p.add_subparsers(dest="cmd", required=True)
+s = sub.add_parser("ls"); s.add_argument("query", nargs="?"); s.add_argument("-n", type=int, default=20); s.add_argument("--sheets", action="store_true"); s.set_defaults(f=cmd_ls)
+s = sub.add_parser("pull"); s.add_argument("doc"); s.add_argument("out", nargs="?"); s.set_defaults(f=cmd_pull)
+s = sub.add_parser("edit"); s.add_argument("doc"); s.add_argument("-e", action="append", default=[]); s.add_argument("--json"); s.set_defaults(f=cmd_edit)
+s = sub.add_parser("push"); s.add_argument("doc"); s.add_argument("file"); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_push)
+s = sub.add_parser("comments"); s.add_argument("doc"); s.set_defaults(f=cmd_comments)
+s = sub.add_parser("comment"); s.add_argument("doc"); s.add_argument("text"); s.add_argument("--quote"); s.set_defaults(f=cmd_comment)
+s = sub.add_parser("reply"); s.add_argument("doc"); s.add_argument("comment"); s.add_argument("text", nargs="?"); s.add_argument("--resolve", action="store_true"); s.set_defaults(f=cmd_reply)
+s = sub.add_parser("tabs"); s.add_argument("doc"); s.set_defaults(f=cmd_tabs)
+s = sub.add_parser("newtab"); s.add_argument("doc"); s.add_argument("title"); s.set_defaults(f=cmd_newtab)
+s = sub.add_parser("get"); s.add_argument("doc"); s.add_argument("range"); s.add_argument("out", nargs="?"); s.add_argument("--formulas", action="store_true"); s.set_defaults(f=cmd_get)
+s = sub.add_parser("set"); s.add_argument("doc"); s.add_argument("range"); s.add_argument("value"); s.set_defaults(f=cmd_set)
+s = sub.add_parser("put"); s.add_argument("doc"); s.add_argument("range"); s.add_argument("file"); s.set_defaults(f=cmd_put)
+s = sub.add_parser("append"); s.add_argument("doc"); s.add_argument("range"); s.add_argument("file"); s.set_defaults(f=cmd_append)
+if "--selftest" in sys.argv:
+    _selftest(); sys.exit()
+a = p.parse_args()
+a.f(a)
