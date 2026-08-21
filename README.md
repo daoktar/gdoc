@@ -26,9 +26,9 @@ Requires `uv`.
    (publish to Production later to stop weekly re-login)
 4. Credentials → Create OAuth client ID → **Desktop app** → download JSON
 5. Save it as `~/.config/gdoc/client_secret.json`
-6. Run `gdoc ls` — browser opens once; token lands in `~/.config/gdoc/token.json`
+6. Run `gdoc ls` — browser opens once; the token is stored in the macOS Keychain (service `gdoc`), with `~/.config/gdoc/token.json` as automatic fallback for headless/cron runs
 
-Credentials live only in `~/.config/gdoc/`, never in this repo.
+The OAuth token lives in the Keychain (file fallback in `~/.config/gdoc/`), the client secret in `~/.config/gdoc/` — never in this repo.
 
 ## Usage
 

@@ -80,6 +80,6 @@ Replaces the ENTIRE doc from markdown. Keeps file ID/URL/sharing, but orphans al
 ## Troubleshooting
 
 - `missing ~/.config/gdoc/client_secret.json` — OAuth not set up; ask the user (needs browser + Google Cloud Console: Desktop-app OAuth client, Docs API + Drive API enabled).
-- `invalid_grant` / auth errors after ~7 days — OAuth app is in Testing mode: delete `~/.config/gdoc/token.json`, ask the user to run `gdoc ls` interactively (opens browser). Permanent fix: publish the OAuth app to Production.
+- `invalid_grant` / auth errors after ~7 days — OAuth app is in Testing mode: clear the stored token (`security delete-generic-password -s gdoc -a token`; also delete `~/.config/gdoc/token.json` if present), ask the user to run `gdoc ls` interactively (opens browser). Permanent fix: publish the OAuth app to Production.
 - Export limit is 10 MB of markdown — hundreds of pages; not a practical constraint.
 - File not found on a URL the user pasted — the ID is truncated; real IDs are ~44 chars. Ask for the full link.
