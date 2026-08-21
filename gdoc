@@ -30,7 +30,7 @@ Sheets (same auth; ranges are A1 notation like 'Лист1!A2:D50'):
 <doc> is a doc/sheet id or any docs.google.com URL.
 NOTE: OLD/NEW in `edit` match the doc's PLAIN text (no markdown syntax like **).
 """
-import csv, json, os, re, sys, argparse, pathlib
+import csv, json, re, sys, argparse, pathlib
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -38,7 +38,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-CFG = pathlib.Path(os.path.expanduser("~/.config/gdoc"))
+CFG = pathlib.Path.home() / ".config/gdoc"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
@@ -58,9 +58,12 @@ def _creds():
     return creds
 
 
-def svc():
-    c = _creds()
-    return build("docs", "v1", credentials=c), build("drive", "v3", credentials=c)
+def docs_svc():
+    return build("docs", "v1", credentials=_creds())
+
+
+def drive_svc():
+    return build("drive", "v3", credentials=_creds())
 
 
 def sheets_svc():
@@ -107,7 +110,7 @@ def flatten(doc):
 
 
 def cmd_ls(a):
-    _, drive = svc()
+    drive = drive_svc()
     mt = "spreadsheet" if a.sheets else "document"
     q = f"mimeType='application/vnd.google-apps.{mt}' and trashed=false"
     if a.query:
@@ -120,7 +123,7 @@ def cmd_ls(a):
 
 
 def cmd_pull(a):
-    _, drive = svc()
+    drive = drive_svc()
     fid = doc_id(a.doc)
     name = drive.files().get(fileId=fid, fields="name", supportsAllDrives=True).execute()["name"]
     data = drive.files().export(fileId=fid, mimeType="text/markdown").execute()
@@ -130,7 +133,7 @@ def cmd_pull(a):
 
 
 def cmd_edit(a):
-    docs, _ = svc()
+    docs = docs_svc()
     fid = doc_id(a.doc)
     if a.json:
         edits = json.loads(pathlib.Path(a.json).read_text())
@@ -183,7 +186,7 @@ def cmd_edit(a):
 def cmd_push(a):
     if not a.force:
         sys.exit("push REPLACES the entire doc (comments are orphaned). Re-run with --force")
-    _, drive = svc()
+    drive = drive_svc()
     fid = doc_id(a.doc)
     media = MediaFileUpload(a.file, mimetype="text/markdown", resumable=True)
     drive.files().update(fileId=fid, media_body=media,
@@ -193,7 +196,7 @@ def cmd_push(a):
 
 
 def cmd_comments(a):
-    _, drive = svc()
+    drive = drive_svc()
     fid = doc_id(a.doc)
     page = None
     while True:
@@ -215,7 +218,7 @@ def cmd_comments(a):
 
 
 def cmd_comment(a):
-    _, drive = svc()
+    drive = drive_svc()
     fid = doc_id(a.doc)
     body = {"content": a.text}
     if a.quote:
@@ -226,7 +229,7 @@ def cmd_comment(a):
 
 
 def cmd_reply(a):
-    _, drive = svc()
+    drive = drive_svc()
     fid = doc_id(a.doc)
     body = {}
     if a.text:
@@ -342,7 +345,7 @@ def _selftest():
     with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, newline="") as f:
         csv.writer(f).writerows([["a", "b,x"], ["1", "2"]])
     assert _read_table(f.name) == [["a", "b,x"], ["1", "2"]]
-    os.unlink(f.name)
+    pathlib.Path(f.name).unlink()
     print("selftest ok")
 
 
