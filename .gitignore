@@ -1,5 +1,6 @@
 # OAuth credentials never belong here (they live in ~/.config/gdoc/), but just in case:
 *.json
+!.claude-plugin/*.json
 token*
 client_secret*
 *.md.bak

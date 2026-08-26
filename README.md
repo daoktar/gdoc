@@ -6,17 +6,22 @@ Built for AI-agent workflows (Claude Code): docs are pulled as markdown and edit
 
 ## Install
 
-```sh
-cp gdoc ~/bin/gdoc && chmod +x ~/bin/gdoc   # or anywhere on PATH
-```
-
-With the Claude Code skill (teaches Claude the safe pull -> edit -> verify workflow):
+As a Claude Code plugin — one line, and `gdoc` lands on PATH for every session:
 
 ```sh
-cp gdoc ~/bin/gdoc && chmod +x ~/bin/gdoc && mkdir -p ~/.claude/skills/google-docs && cp skill/SKILL.md ~/.claude/skills/google-docs/
+claude plugin marketplace add daoktar/gdoc && claude plugin install gdoc@gdoc
 ```
 
-Requires `uv`.
+That installs both halves: the `gdoc` CLI (`bin/`, added to PATH automatically) and the
+`google-docs` skill that teaches Claude the safe pull -> edit -> verify workflow.
+
+Prefer it in your own shell too, or not using Claude Code at all:
+
+```sh
+ln -s "$PWD/bin/gdoc" ~/bin/gdoc   # or anywhere on PATH
+```
+
+Requires `uv` — the script declares its own dependencies and installs them on first run.
 
 ## Auth setup (once)
 
