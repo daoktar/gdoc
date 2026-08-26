@@ -5,11 +5,16 @@ description: Read, edit, and comment on Google Docs and read/write Google Sheets
 
 # Google Docs via gdoc
 
-`gdoc` — self-contained uv script, on PATH already (the plugin's `bin/` is added automatically). Auth lives in `~/.config/gdoc/`. `<doc>` = doc ID or any docs.google.com URL.
+`gdoc` is a self-contained Python CLI that needs **a shell, network access, and a one-time Google OAuth login** — it cannot work in a chat-only sandbox.
+
+- Installed as a Claude Code plugin it is already on PATH: run `gdoc`.
+- Bundled anywhere else (ChatGPT, Codex): call the copy shipped beside this file, `scripts/gdoc`.
+
+Examples below write `gdoc` for brevity. Auth lives in `~/.config/gdoc/`; first-time setup is [references/setup.md](references/setup.md). `<doc>` = doc ID or any docs.google.com URL.
 
 ## Core workflow
 
-1. **Pull** the doc to a local markdown file (in the scratchpad, not the user's project):
+1. **Pull** the doc to a local markdown file (in a temp dir, not the user's project):
    ```bash
    gdoc pull <doc> doc.md
    ```
@@ -79,9 +84,9 @@ Replaces the ENTIRE doc from markdown. Keeps file ID/URL/sharing, but orphans al
 
 ## Troubleshooting
 
-- `gdoc: command not found` — installed by hand instead of as a plugin. Call the script by its path, or symlink it onto PATH.
-- `uv: command not found` — the script runs under [uv](https://docs.astral.sh/uv/); install it first.
-- `missing ~/.config/gdoc/client_secret.json` — OAuth not set up; ask the user (needs browser + Google Cloud Console: Desktop-app OAuth client, Docs API + Drive API enabled).
-- `invalid_grant` / auth errors after ~7 days — OAuth app is in Testing mode: clear the stored token (`security delete-generic-password -s gdoc -a token`; also delete `~/.config/gdoc/token.json` if present), ask the user to run `gdoc ls` interactively (opens browser). Permanent fix: publish the OAuth app to Production.
+- `gdoc: command not found` — not on PATH. Call the bundled copy by path: `scripts/gdoc`, relative to this file.
+- `uv: command not found` — either install [uv](https://docs.astral.sh/uv/), or `pip install google-api-python-client google-auth-oauthlib keyring` and run `python3 scripts/gdoc`.
+- `missing ~/.config/gdoc/client_secret.json` — OAuth not set up. It needs a browser and cannot be done for the user; hand them [references/setup.md](references/setup.md).
+- `invalid_grant` / auth errors after ~7 days — OAuth app is in Testing mode. Clear the token (`security delete-generic-password -s gdoc -a token`, plus `rm -f ~/.config/gdoc/token.json`) and ask the user to run `gdoc ls` interactively. Permanent fix and details: [references/setup.md](references/setup.md).
 - Export limit is 10 MB of markdown — hundreds of pages; not a practical constraint.
 - File not found on a URL the user pasted — the ID is truncated; real IDs are ~44 chars. Ask for the full link.

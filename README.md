@@ -2,28 +2,65 @@
 
 Read/edit Google Docs and Sheets from the shell. Single self-contained [uv](https://docs.astral.sh/uv/) script — dependencies install themselves on first run.
 
-Built for AI-agent workflows (Claude Code): docs are pulled as markdown and edited with unique old/new text pairs — no character-index arithmetic, so edits stay reliable on documents dozens of pages long.
+Built for AI-agent workflows: docs are pulled as markdown and edited with unique old/new text pairs — no character-index arithmetic, so edits stay reliable on documents dozens of pages long. Ships with an Agent Skill that installs into Claude Code, ChatGPT or Codex.
 
 ## Install
 
-As a Claude Code plugin — one line, and `gdoc` lands on PATH for every session:
+The repo ships two things: the `gdoc` CLI and a `google-docs` [Agent Skill](https://agentskills.dev)
+that teaches an agent the safe pull -> edit -> verify workflow. They live together in
+`skills/google-docs/` — one folder, one copy of the script.
+
+### Claude Code
 
 ```sh
 claude plugin marketplace add daoktar/gdoc && claude plugin install gdoc@gdoc
 ```
 
-That installs both halves: the `gdoc` CLI (`bin/`, added to PATH automatically) and the
-`google-docs` skill that teaches Claude the safe pull -> edit -> verify workflow.
+Installs the skill and puts `gdoc` on PATH for every session. Update with
+`claude plugin update gdoc`.
 
-Prefer it in your own shell too, or not using Claude Code at all:
+### ChatGPT
+
+ChatGPT reads the same Agent Skills format, and its uploader takes a zip. Build one from a
+clone:
 
 ```sh
-ln -s "$PWD/bin/gdoc" ~/bin/gdoc   # or anywhere on PATH
+git clone https://github.com/daoktar/gdoc && cd gdoc/skills && zip -r ../google-docs-skill.zip google-docs
 ```
 
+Then in ChatGPT: **Skills -> Create -> Upload from your computer** and pick
+`google-docs-skill.zip` (the unpacked `skills/google-docs/` folder is accepted too). The
+bundle is ~13 KB against limits of 50 MB and 500 files.
+
+Skills are available on Business, Enterprise, Edu, Teachers and Healthcare plans; on
+Enterprise and Edu an admin has to enable **Skills** and **skill uploading** first.
+
+**Read this before you upload.** `gdoc` drives the Google APIs from a shell. In a ChatGPT
+workspace with no shell tool the skill still carries the knowledge — the edit workflow,
+what each guard means, the Sheets A1 rules — but the commands will not execute. It earns
+its keep where the agent has a shell.
+
+### Codex and other agent CLIs
+
+Copy `skills/google-docs/` into a skills directory — `.agents/skills/` in a repo for
+project scope, `~/.agents/skills/` for every session.
+
+### Just the CLI
+
+```sh
+ln -s "$PWD/skills/google-docs/scripts/gdoc" ~/bin/gdoc   # or anywhere on PATH
+```
+
+`bin/gdoc` in this repo is a symlink to the same file, so the plugin loader and your shell
+run one script, not two copies.
+
 Requires `uv` — the script declares its own dependencies and installs them on first run.
+Without `uv`: `pip install google-api-python-client google-auth-oauthlib keyring` and call
+it with `python3`.
 
 ## Auth setup (once)
+
+Full walkthrough, token storage and the seven-day expiry: [skills/google-docs/references/setup.md](skills/google-docs/references/setup.md). Short version:
 
 1. [Google Cloud Console](https://console.cloud.google.com) → new project
 2. Enable **Google Docs API**, **Google Drive API**, **Google Sheets API**
