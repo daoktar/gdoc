@@ -1,9 +1,17 @@
 {
   "name": "gdoc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read, edit and comment on Google Docs and Sheets from Claude Code — markdown export, text-anchored edits, A1 ranges.",
-  "author": { "name": "daoktar", "url": "https://github.com/daoktar" },
+  "author": {
+    "name": "daoktar",
+    "url": "https://github.com/daoktar"
+  },
   "repository": "https://github.com/daoktar/gdoc",
   "license": "MIT",
-  "keywords": ["google-docs", "google-sheets", "markdown", "cli"]
+  "keywords": [
+    "google-docs",
+    "google-sheets",
+    "markdown",
+    "cli"
+  ]
 }

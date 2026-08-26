@@ -2,15 +2,20 @@
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "gdoc",
   "description": "Google Docs and Sheets for Claude Code, via a single self-contained CLI.",
-  "owner": { "name": "daoktar", "url": "https://github.com/daoktar" },
+  "owner": {
+    "name": "daoktar",
+    "url": "https://github.com/daoktar"
+  },
   "plugins": [
     {
       "name": "gdoc",
       "source": "./",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "Read, edit and comment on Google Docs and Sheets — markdown export, text-anchored edits that survive long documents, A1-range reads/writes.",
       "category": "productivity",
-      "author": { "name": "daoktar" }
+      "author": {
+        "name": "daoktar"
+      }
     }
   ]
 }
