@@ -4,3 +4,6 @@
 token*
 client_secret*
 *.md.bak
+
+# build artifacts
+dist/
